@@ -27,8 +27,10 @@ def test_settings_defaults() -> None:
     assert 0 <= settings.digest_hour_local <= 23
 
 
-def test_load_default_rules_empty_in_sprint_0() -> None:
-    assert load_default_rules() == []
+def test_load_default_rules_includes_sprint_1_presets() -> None:
+    rules = load_default_rules()
+    names = {r.name for r in rules}
+    assert {"funding_extreme", "oi_surge", "basis_blowout", "liq_cascade"} <= names
 
 
 def test_format_telegram_renders_severity_and_asset() -> None:

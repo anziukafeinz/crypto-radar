@@ -1,47 +1,31 @@
-"""APScheduler wiring.
-
-Sprint 0 only registers a heartbeat job. Sprint 1+ adds derivative pollers and
-the daily digest cron.
-"""
+"""APScheduler wiring."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from loguru import logger
 
-from radar.config import get_settings
+from radar.config import Settings
+from radar.modules.derivatives import DerivativesPoller
 
 
-async def heartbeat() -> None:
-    """Lightweight scheduler heartbeat used during Sprint 0."""
-    logger.debug("scheduler heartbeat at {}", datetime.now(UTC).isoformat())
-
-
-def build_scheduler() -> AsyncIOScheduler:
-    """Create the configured scheduler with default jobs."""
-    settings = get_settings()
+def build_scheduler(settings: Settings, poller: DerivativesPoller) -> AsyncIOScheduler:
+    """Create the scheduler with the derivatives poll job registered."""
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
 
     scheduler.add_job(
-        heartbeat,
-        trigger=IntervalTrigger(minutes=5),
-        id="heartbeat",
+        poller.poll,
+        trigger=IntervalTrigger(minutes=settings.derivatives_poll_interval_min),
+        id="derivatives_poll",
         replace_existing=True,
-    )
-
-    scheduler.add_job(
-        heartbeat,
-        trigger=CronTrigger(hour=settings.digest_hour_local, minute=0),
-        id="daily_digest_placeholder",
-        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=settings.derivatives_poll_interval_min * 60,
     )
 
     logger.info(
-        "Scheduler configured (tz={}, derivatives={}m, narrative={}m, digest={:02d}:00)",
+        "Scheduler configured (tz={}, derivatives every {}m, narrative every {}m, digest at {:02d}:00)",
         settings.timezone,
         settings.derivatives_poll_interval_min,
         settings.narrative_poll_interval_min,
