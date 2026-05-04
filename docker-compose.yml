@@ -1,0 +1,12 @@
+services:
+  radar:
+    build: .
+    container_name: crypto-radar
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./data/radar.db
+      - TZ=Asia/Jakarta
