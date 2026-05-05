@@ -27,6 +27,7 @@ from radar.modules.derivatives import (
 from radar.scheduler import build_scheduler
 from radar.sources.binance import Binance
 from radar.sources.binance_ws import BinanceLiquidationStream
+from radar.sources.bybit_ws import BybitLiquidationStream
 
 
 def configure_logging(level: str) -> None:
@@ -76,13 +77,29 @@ async def main() -> None:
     def _on_liquidation(event: LiquidationEvent) -> None:
         liq_aggregator.record(event)
 
+    # Two liquidation feeds run in parallel — both write to the same
+    # aggregator. Bybit is the primary source (Sprint 1.7) because Binance's
+    # public ``forceOrder`` stream has been observed silent from many regions
+    # despite REST being reachable; Binance stays a best-effort secondary.
     if settings.binance_forceorder_ws_url:
-        liq_stream = BinanceLiquidationStream(
+        binance_liq_stream = BinanceLiquidationStream(
             on_event=_on_liquidation,
             url=settings.binance_forceorder_ws_url,
         )
     else:
-        liq_stream = BinanceLiquidationStream(on_event=_on_liquidation)
+        binance_liq_stream = BinanceLiquidationStream(on_event=_on_liquidation)
+
+    if settings.bybit_liquidation_ws_url:
+        bybit_liq_stream = BybitLiquidationStream(
+            on_event=_on_liquidation,
+            symbols=universe,
+            url=settings.bybit_liquidation_ws_url,
+        )
+    else:
+        bybit_liq_stream = BybitLiquidationStream(
+            on_event=_on_liquidation,
+            symbols=universe,
+        )
 
     poller = DerivativesPoller(
         binance=binance,
@@ -96,16 +113,21 @@ async def main() -> None:
     scheduler = build_scheduler(settings, poller)
     scheduler.start()
 
-    liq_task = asyncio.create_task(liq_stream.run(), name="binance_liquidation_ws")
+    binance_liq_task = asyncio.create_task(binance_liq_stream.run(), name="binance_liquidation_ws")
+    bybit_liq_task = asyncio.create_task(bybit_liq_stream.run(), name="bybit_liquidation_ws")
 
     try:
         logger.info("Bot polling start")
         await dispatcher.start_polling(bot, handle_signals=True)
     finally:
-        liq_stream.stop()
-        liq_task.cancel()
+        binance_liq_stream.stop()
+        bybit_liq_stream.stop()
+        binance_liq_task.cancel()
+        bybit_liq_task.cancel()
         with suppress(asyncio.CancelledError):
-            await liq_task
+            await binance_liq_task
+        with suppress(asyncio.CancelledError):
+            await bybit_liq_task
         scheduler.shutdown(wait=False)
         await binance.aclose()
         await bot.session.close()

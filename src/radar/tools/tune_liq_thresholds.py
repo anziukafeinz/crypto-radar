@@ -1,12 +1,14 @@
 """Live calibration helper for ``liq_cascade`` thresholds.
 
-Listens to the Binance ``forceOrder`` WebSocket for a fixed window, samples
-the 1h aggregator state at a regular cadence, and prints percentile
-distributions plus threshold recommendations split by major/minor asset
-class.
+Listens to the Bybit ``allLiquidation`` WebSocket (primary, Sprint 1.7) and
+the Binance ``forceOrder`` WebSocket (best-effort secondary) for a fixed
+window, samples the 1h aggregator state at a regular cadence, and prints
+percentile distributions plus threshold recommendations split by
+major/minor asset class.
 
-Exists because Binance's public REST does not expose historical liquidation
-data, so calibration has to be done live.
+Exists because public REST endpoints do not expose historical liquidation
+data, so calibration has to be done live. The tuner uses the same source
+mix as the bot so calibrated thresholds match what production will see.
 """
 
 from __future__ import annotations
@@ -26,8 +28,9 @@ from radar.modules.derivatives.liq_aggregator import (
     LiquidationAggregator,
     LiquidationEvent,
 )
-from radar.modules.derivatives.universe import is_major
+from radar.modules.derivatives.universe import is_major, parse_universe
 from radar.sources.binance_ws import BinanceLiquidationStream
+from radar.sources.bybit_ws import BybitLiquidationStream
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,9 +147,11 @@ async def run_tuner(
     *,
     minutes: float,
     sample_interval_sec: float,
-    url: str | None = None,
+    symbols: Iterable[str],
+    binance_url: str | None = None,
+    bybit_url: str | None = None,
 ) -> ThresholdRecommendation:
-    """Drive the WS for ``minutes`` and return the recommendation.
+    """Drive Binance + Bybit WS for ``minutes`` and return the recommendation.
 
     Cancellable: ``KeyboardInterrupt`` / task cancellation surface a partial
     recommendation built from samples collected so far.
@@ -161,14 +166,23 @@ async def run_tuner(
     def _on_event(event: LiquidationEvent) -> None:
         aggregator.record(event)
 
-    if url:
-        stream = BinanceLiquidationStream(on_event=_on_event, url=url)
+    if binance_url:
+        binance_stream = BinanceLiquidationStream(on_event=_on_event, url=binance_url)
     else:
-        stream = BinanceLiquidationStream(on_event=_on_event)
+        binance_stream = BinanceLiquidationStream(on_event=_on_event)
+
+    bybit_symbols = list(symbols)
+    if bybit_url:
+        bybit_stream = BybitLiquidationStream(
+            on_event=_on_event, symbols=bybit_symbols, url=bybit_url
+        )
+    else:
+        bybit_stream = BybitLiquidationStream(on_event=_on_event, symbols=bybit_symbols)
 
     samples: list[Sample] = []
     deadline = asyncio.get_event_loop().time() + minutes * 60.0
-    stream_task = asyncio.create_task(stream.run(), name="binance_ws_tune")
+    binance_task = asyncio.create_task(binance_stream.run(), name="binance_ws_tune")
+    bybit_task = asyncio.create_task(bybit_stream.run(), name="bybit_ws_tune")
     try:
         while asyncio.get_event_loop().time() < deadline:
             remaining = deadline - asyncio.get_event_loop().time()
@@ -183,10 +197,14 @@ async def run_tuner(
                 len(aggregator.tracked_symbols()),
             )
     finally:
-        stream.stop()
-        stream_task.cancel()
+        binance_stream.stop()
+        bybit_stream.stop()
+        binance_task.cancel()
+        bybit_task.cancel()
         with suppress(asyncio.CancelledError):
-            await stream_task
+            await binance_task
+        with suppress(asyncio.CancelledError):
+            await bybit_task
 
     return compute_threshold_recommendations(samples)
 
@@ -194,7 +212,10 @@ async def run_tuner(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="radar-tune",
-        description="Calibrate liq_cascade thresholds from a live Binance forceOrder window.",
+        description=(
+            "Calibrate liq_cascade thresholds from a live Bybit "
+            "allLiquidation + Binance forceOrder window."
+        ),
     )
     parser.add_argument(
         "--minutes",
@@ -209,25 +230,35 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Seconds between aggregator snapshots (default: 60).",
     )
     parser.add_argument(
-        "--url",
+        "--binance-url",
         type=str,
         default=None,
         help="Override the Binance forceOrder WebSocket URL "
         "(falls back to BINANCE_FORCEORDER_WS_URL or the public default).",
+    )
+    parser.add_argument(
+        "--bybit-url",
+        type=str,
+        default=None,
+        help="Override the Bybit allLiquidation WebSocket URL "
+        "(falls back to BYBIT_LIQUIDATION_WS_URL or the public default).",
     )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    url = args.url
-    if url is None:
-        url = get_settings().binance_forceorder_ws_url
+    settings = get_settings()
+    binance_url = args.binance_url or settings.binance_forceorder_ws_url
+    bybit_url = args.bybit_url or settings.bybit_liquidation_ws_url
+    universe = parse_universe(settings.derivatives_universe)
     rec = asyncio.run(
         run_tuner(
             minutes=args.minutes,
             sample_interval_sec=args.sample_interval_sec,
-            url=url,
+            symbols=universe,
+            binance_url=binance_url,
+            bybit_url=bybit_url,
         )
     )
     print(format_summary(rec))

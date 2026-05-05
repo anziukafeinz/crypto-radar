@@ -86,6 +86,7 @@ poetry run mypy src
 | 1 | Derivatives MVP — Binance source, 4 alert presets, scheduler poll | done |
 | 1.5 | Liquidation data source — Binance `forceOrder` WebSocket + 1h aggregator | done |
 | 1.6 | `BINANCE_FORCEORDER_WS_URL` override + `radar-tune` calibration helper | done |
+| 1.7 | Bybit `allLiquidation` primary source (Binance silent in many regions) | done |
 | 2 | Narrative MVP — 2 alerts + daily digest | planned |
 | 3 | Cross-signal, threshold tuning per user, backtest replay | planned |
 
@@ -96,28 +97,40 @@ poetry run mypy src
 | `funding_extreme` | Funding rate > +0.05% (long) or < -0.03% (short) |
 | `oi_surge` | 24h OI move > +15% with `|price%|` < 3% (squeeze setup) |
 | `basis_blowout` | Annualised basis (funding × 3 × 365) outside `[-10%, +25%]` |
-| `liq_cascade` | 1h long/short liq USD ≥ $50M (BTC/ETH) or $10M (other) — fed by Binance `forceOrder` WebSocket |
+| `liq_cascade` | 1h long/short liq USD ≥ $50M (BTC/ETH) or $10M (other) — fed by Bybit + Binance liquidation WebSockets |
 
-## Liquidation stream (Sprint 1.5)
+## Liquidation streams (Sprint 1.5 + 1.7)
 
-The `liq_cascade` rule is now backed by a live Binance `forceOrder` WebSocket
-(`wss://fstream.binance.com/ws/!forceOrder@arr`). On boot the bot opens one
-all-symbol stream, parses each frame into a `LiquidationEvent`, and feeds an
-in-memory `LiquidationAggregator` keyed by radar symbol with a rolling 1h
-window. The aggregator's totals are merged into the next derivatives poll
-snapshot as `liq_long_usd_1h` / `liq_short_usd_1h`, persisted alongside the
-existing 7 metrics, and exposed via `/liq <SYMBOL>`.
+The `liq_cascade` rule is backed by **two** public WebSocket feeds that both
+write into the same in-memory `LiquidationAggregator` (rolling 1h window per
+radar symbol):
 
-The stream auto-reconnects with exponential backoff. If the WS endpoint is
-unreachable (geo-block, network, etc.) the rest of the bot keeps running —
-totals just stay at `$0`.
+- **Bybit** `wss://stream.bybit.com/v5/public/linear` — primary. The bot
+  subscribes to `allLiquidation.{symbol}USDT` for every symbol in the
+  universe at boot. 500 ms push frequency, no per-symbol throttle. Reaches
+  more regions reliably than the Binance equivalent.
+- **Binance** `wss://fstream.binance.com/ws/!forceOrder@arr` — best-effort
+  secondary. One all-symbol stream. The Binance docs only push the
+  *largest* liquidation per symbol per second, and the stream has been
+  observed silent from VPS/residential IPs that have no trouble with the
+  REST API. Treat it as a bonus when it works.
 
-## Tuning `liq_cascade` thresholds (Sprint 1.6)
+Both streams parse into `LiquidationEvent`s and feed the aggregator without
+double-counting (each exchange has its own liquidations). Combined totals are
+merged into the next derivatives poll snapshot as
+`liq_long_usd_1h` / `liq_short_usd_1h`, persisted alongside the existing 7
+metrics, and exposed via `/liq <SYMBOL>`.
+
+Both streams auto-reconnect with exponential backoff. If either endpoint is
+unreachable, the rest of the bot keeps running — its contribution to the
+aggregator simply stays at `$0`.
+
+## Tuning `liq_cascade` thresholds (Sprint 1.6 + 1.7)
 
 The default `liq_cascade` cutoffs (`$50M` major / `$10M` minor) are first
-guesses — Binance does not expose historical liquidation data via REST, so
-calibration has to happen live. The `radar-tune` helper observes the live
-WS stream for a configurable window, samples the rolling 1h totals, and
+guesses — neither exchange exposes historical liquidation data via REST, so
+calibration has to happen live. The `radar-tune` helper observes the same
+Bybit + Binance feed mix the bot uses, samples the rolling 1h totals, and
 prints percentile recommendations:
 
 ```bash
@@ -127,8 +140,9 @@ poetry run radar-tune --minutes 60 --sample-interval-sec 60
 Output is a per-class `p90 / p95 / p99` table plus suggested replacement
 values for `LiquidationCascadeRule.major_threshold_usd` and
 `minor_threshold_usd`. Edit `src/radar/alerts/rules/liq_cascade.py` to
-apply them and restart the bot. Set `BINANCE_FORCEORDER_WS_URL` (or
-`--url`) if you need to point at a proxy.
+apply them and restart the bot. Set `BYBIT_LIQUIDATION_WS_URL` /
+`BINANCE_FORCEORDER_WS_URL` (or `--bybit-url` / `--binance-url`) if you
+need to point at a proxy.
 
 ## Bot commands
 
