@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from contextlib import suppress
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
@@ -17,9 +18,15 @@ from radar.alerts.presets import load_default_rules
 from radar.bot import build_dispatcher
 from radar.config import get_settings
 from radar.db.session import get_sessionmaker, init_db
-from radar.modules.derivatives import DerivativesPoller, parse_universe
+from radar.modules.derivatives import (
+    DerivativesPoller,
+    LiquidationAggregator,
+    LiquidationEvent,
+    parse_universe,
+)
 from radar.scheduler import build_scheduler
 from radar.sources.binance import Binance
+from radar.sources.binance_ws import BinanceLiquidationStream
 
 
 def configure_logging(level: str) -> None:
@@ -64,21 +71,35 @@ async def main() -> None:
     universe = parse_universe(settings.derivatives_universe)
     logger.info("Tracking {} symbols: {}", len(universe), ", ".join(universe))
 
+    liq_aggregator = LiquidationAggregator()
+
+    def _on_liquidation(event: LiquidationEvent) -> None:
+        liq_aggregator.record(event)
+
+    liq_stream = BinanceLiquidationStream(on_event=_on_liquidation)
+
     poller = DerivativesPoller(
         binance=binance,
         sessionmaker=sessionmaker,
         engine=engine,
         notifier=notifier,
         universe=universe,
+        liq_aggregator=liq_aggregator,
     )
 
     scheduler = build_scheduler(settings, poller)
     scheduler.start()
 
+    liq_task = asyncio.create_task(liq_stream.run(), name="binance_liquidation_ws")
+
     try:
         logger.info("Bot polling start")
         await dispatcher.start_polling(bot, handle_signals=True)
     finally:
+        liq_stream.stop()
+        liq_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await liq_task
         scheduler.shutdown(wait=False)
         await binance.aclose()
         await bot.session.close()

@@ -54,5 +54,22 @@ def to_binance(symbol: str) -> str:
     return f"{symbol.upper()}USDT"
 
 
+def from_binance(binance_symbol: str) -> str | None:
+    """Convert a Binance USDT-perp id back to the radar bare symbol.
+
+    ``BTCUSDT`` -> ``BTC``. ``1000PEPEUSDT`` -> ``PEPE`` (Binance prefixes
+    micro-cap perps with ``1000``; the radar universe uses the bare ticker).
+    Returns ``None`` for non-USDT-margined or otherwise unrecognised ids
+    (e.g. ``BTCBUSD``, ``ETHUSDC``) so the caller can drop the frame.
+    """
+    s = binance_symbol.upper()
+    if not s.endswith("USDT"):
+        return None
+    base = s[:-4]
+    if base.startswith("1000") and len(base) > 4 and base[4:].isalpha():
+        base = base[4:]
+    return base or None
+
+
 def is_major(symbol: str) -> bool:
     return symbol.upper() in {"BTC", "ETH"}

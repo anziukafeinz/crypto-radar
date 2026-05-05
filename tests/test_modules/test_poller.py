@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -22,6 +23,10 @@ os.environ.setdefault("TELEGRAM_ADMIN_CHAT_ID", "1")
 from radar.alerts.engine import AlertEngine, AlertSignal
 from radar.alerts.presets import load_default_rules
 from radar.db.models import Alert, Base, Metric
+from radar.modules.derivatives.liq_aggregator import (
+    LiquidationAggregator,
+    LiquidationEvent,
+)
 from radar.modules.derivatives.poller import DerivativesPoller
 
 
@@ -167,3 +172,67 @@ async def test_poller_fires_oi_surge_when_oi_jumps_with_flat_price(
     await poller.poll()
     presets = {s.preset for s in notifier.dispatched}
     assert "oi_surge" in presets
+
+
+@pytest.mark.asyncio
+async def test_poller_persists_liquidation_metrics_when_aggregator_present(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Aggregator totals should land in the DB alongside the 7 base metrics."""
+    binance = StubBinance(funding_rate=0.0001)
+    notifier = StubNotifier()
+    engine = AlertEngine(rules=load_default_rules())
+    aggregator = LiquidationAggregator()
+    aggregator.record(
+        LiquidationEvent(
+            symbol="BTC",
+            side="long",
+            usd=2_500_000.0,
+            ts=datetime.now(UTC),
+        )
+    )
+    poller = DerivativesPoller(
+        binance=binance,  # type: ignore[arg-type]
+        sessionmaker=session_factory,
+        engine=engine,
+        notifier=notifier,  # type: ignore[arg-type]
+        universe=["BTC"],
+        liq_aggregator=aggregator,
+    )
+    await poller.poll()
+
+    async with session_factory() as session:
+        rows = (await session.execute(select(Metric))).scalars().all()
+    by_name = {m.metric_name: m for m in rows}
+    assert by_name["liq_long_usd_1h"].value == pytest.approx(2_500_000.0)
+    assert by_name["liq_short_usd_1h"].value == 0.0
+
+
+@pytest.mark.asyncio
+async def test_poller_fires_liq_cascade_when_threshold_breached(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """With aggregator state above the major threshold, the rule must fire."""
+    binance = StubBinance(funding_rate=0.0001)
+    notifier = StubNotifier()
+    engine = AlertEngine(rules=load_default_rules())
+    aggregator = LiquidationAggregator()
+    aggregator.record(
+        LiquidationEvent(
+            symbol="BTC",
+            side="long",
+            usd=80_000_000.0,
+            ts=datetime.now(UTC),
+        )
+    )
+    poller = DerivativesPoller(
+        binance=binance,  # type: ignore[arg-type]
+        sessionmaker=session_factory,
+        engine=engine,
+        notifier=notifier,  # type: ignore[arg-type]
+        universe=["BTC"],
+        liq_aggregator=aggregator,
+    )
+    await poller.poll()
+    presets = {s.preset for s in notifier.dispatched}
+    assert "liq_cascade" in presets
