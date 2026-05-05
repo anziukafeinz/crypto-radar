@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     digest_hour_local: int = Field(default=7)
 
     derivatives_universe: str | None = Field(default=None)
+    binance_forceorder_ws_url: str | None = Field(default=None)
 
 
 _settings: Settings | None = None

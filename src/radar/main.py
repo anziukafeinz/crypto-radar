@@ -76,7 +76,13 @@ async def main() -> None:
     def _on_liquidation(event: LiquidationEvent) -> None:
         liq_aggregator.record(event)
 
-    liq_stream = BinanceLiquidationStream(on_event=_on_liquidation)
+    if settings.binance_forceorder_ws_url:
+        liq_stream = BinanceLiquidationStream(
+            on_event=_on_liquidation,
+            url=settings.binance_forceorder_ws_url,
+        )
+    else:
+        liq_stream = BinanceLiquidationStream(on_event=_on_liquidation)
 
     poller = DerivativesPoller(
         binance=binance,

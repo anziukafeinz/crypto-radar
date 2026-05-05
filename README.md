@@ -85,6 +85,7 @@ poetry run mypy src
 | 0 | Skeleton + Telegram bot hello-world + SQLite | done |
 | 1 | Derivatives MVP — Binance source, 4 alert presets, scheduler poll | done |
 | 1.5 | Liquidation data source — Binance `forceOrder` WebSocket + 1h aggregator | done |
+| 1.6 | `BINANCE_FORCEORDER_WS_URL` override + `radar-tune` calibration helper | done |
 | 2 | Narrative MVP — 2 alerts + daily digest | planned |
 | 3 | Cross-signal, threshold tuning per user, backtest replay | planned |
 
@@ -110,6 +111,24 @@ existing 7 metrics, and exposed via `/liq <SYMBOL>`.
 The stream auto-reconnects with exponential backoff. If the WS endpoint is
 unreachable (geo-block, network, etc.) the rest of the bot keeps running —
 totals just stay at `$0`.
+
+## Tuning `liq_cascade` thresholds (Sprint 1.6)
+
+The default `liq_cascade` cutoffs (`$50M` major / `$10M` minor) are first
+guesses — Binance does not expose historical liquidation data via REST, so
+calibration has to happen live. The `radar-tune` helper observes the live
+WS stream for a configurable window, samples the rolling 1h totals, and
+prints percentile recommendations:
+
+```bash
+poetry run radar-tune --minutes 60 --sample-interval-sec 60
+```
+
+Output is a per-class `p90 / p95 / p99` table plus suggested replacement
+values for `LiquidationCascadeRule.major_threshold_usd` and
+`minor_threshold_usd`. Edit `src/radar/alerts/rules/liq_cascade.py` to
+apply them and restart the bot. Set `BINANCE_FORCEORDER_WS_URL` (or
+`--url`) if you need to point at a proxy.
 
 ## Bot commands
 
