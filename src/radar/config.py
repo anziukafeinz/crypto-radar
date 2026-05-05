@@ -46,6 +46,7 @@ class Settings(BaseSettings):
 
     derivatives_universe: str | None = Field(default=None)
     binance_forceorder_ws_url: str | None = Field(default=None)
+    bybit_liquidation_ws_url: str | None = Field(default=None)
 
 
 _settings: Settings | None = None

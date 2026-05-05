@@ -71,5 +71,33 @@ def from_binance(binance_symbol: str) -> str | None:
     return base or None
 
 
+# Bybit prefixes a handful of micro-cap perps with ``1000`` (same convention as
+# Binance). The set below is intentionally narrow: only symbols that appear in
+# the default universe and are known to ship as ``1000XXXUSDT`` on Bybit. New
+# tickers can be added as the universe grows.
+_BYBIT_THOUSAND_PREFIX: frozenset[str] = frozenset({"PEPE", "SHIB", "BONK", "FLOKI"})
+
+
+def to_bybit(symbol: str) -> str:
+    """Return Bybit USDT-perp symbol id (e.g. ``BTC`` -> ``BTCUSDT``).
+
+    For micro-caps that Bybit ships with the ``1000`` prefix
+    (``PEPE`` -> ``1000PEPEUSDT``) the prefix is added automatically so the
+    caller can subscribe to the correct topic name.
+    """
+    s = symbol.upper()
+    if s in _BYBIT_THOUSAND_PREFIX:
+        return f"1000{s}USDT"
+    return f"{s}USDT"
+
+
+def from_bybit(bybit_symbol: str) -> str | None:
+    """Convert a Bybit USDT-perp id back to the radar bare symbol.
+
+    Same conventions as :func:`from_binance` (``1000PEPEUSDT`` -> ``PEPE``).
+    """
+    return from_binance(bybit_symbol)
+
+
 def is_major(symbol: str) -> bool:
     return symbol.upper() in {"BTC", "ETH"}

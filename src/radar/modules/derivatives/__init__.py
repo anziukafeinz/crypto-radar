@@ -9,9 +9,11 @@ from radar.modules.derivatives.poller import DerivativesPoller
 from radar.modules.derivatives.universe import (
     DEFAULT_PERPETUALS,
     from_binance,
+    from_bybit,
     is_major,
     parse_universe,
     to_binance,
+    to_bybit,
 )
 
 __all__ = [
@@ -21,7 +23,9 @@ __all__ = [
     "LiquidationEvent",
     "LiquidationSide",
     "from_binance",
+    "from_bybit",
     "is_major",
     "parse_universe",
     "to_binance",
+    "to_bybit",
 ]
