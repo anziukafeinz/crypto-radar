@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from radar.alerts.dispatcher import TelegramNotifier
 from radar.alerts.engine import AlertEngine, RuleContext
 from radar.db.models import Metric
+from radar.modules.derivatives.liq_aggregator import LiquidationAggregator
 from radar.modules.derivatives.universe import is_major, to_binance
 from radar.sources.base import SourceError
 from radar.sources.binance import Binance
@@ -26,12 +27,14 @@ class DerivativesPoller:
         engine: AlertEngine,
         notifier: TelegramNotifier,
         universe: list[str],
+        liq_aggregator: LiquidationAggregator | None = None,
     ) -> None:
         self._binance = binance
         self._sessionmaker = sessionmaker
         self._engine = engine
         self._notifier = notifier
         self._universe = universe
+        self._liq_aggregator = liq_aggregator
 
     async def poll(self) -> None:
         """Single poll cycle across the entire universe."""
@@ -68,7 +71,7 @@ class DerivativesPoller:
         oi_24h_ago = float(oi_hist[0]["sumOpenInterestValue"])
         price_now = float(klines[-1][4])
         price_24h_ago = float(klines[0][4])
-        return {
+        snapshot: dict[str, Any] = {
             "binance_symbol": to_binance(symbol),
             "mark_price": float(prem["markPrice"]),
             "index_price": float(prem["indexPrice"]),
@@ -79,6 +82,11 @@ class DerivativesPoller:
             "price_24h_ago": price_24h_ago,
             "is_major": is_major(symbol),
         }
+        if self._liq_aggregator is not None:
+            long_usd, short_usd = self._liq_aggregator.totals(symbol)
+            snapshot["liq_long_usd_1h"] = long_usd
+            snapshot["liq_short_usd_1h"] = short_usd
+        return snapshot
 
     async def _persist_snapshot(self, symbol: str, snapshot: dict[str, Any]) -> None:
         ts = datetime.now(UTC).replace(tzinfo=None)
@@ -90,6 +98,8 @@ class DerivativesPoller:
             "oi_24h_ago_usd",
             "price_now",
             "price_24h_ago",
+            "liq_long_usd_1h",
+            "liq_short_usd_1h",
         )
         async with self._sessionmaker() as session:
             for name in metric_fields:

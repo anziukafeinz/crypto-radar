@@ -84,7 +84,7 @@ poetry run mypy src
 |---|---|---|
 | 0 | Skeleton + Telegram bot hello-world + SQLite | done |
 | 1 | Derivatives MVP — Binance source, 4 alert presets, scheduler poll | done |
-| 1.5 | Liquidation data source (Coinglass / WebSocket) | planned |
+| 1.5 | Liquidation data source — Binance `forceOrder` WebSocket + 1h aggregator | done |
 | 2 | Narrative MVP — 2 alerts + daily digest | planned |
 | 3 | Cross-signal, threshold tuning per user, backtest replay | planned |
 
@@ -95,7 +95,21 @@ poetry run mypy src
 | `funding_extreme` | Funding rate > +0.05% (long) or < -0.03% (short) |
 | `oi_surge` | 24h OI move > +15% with `|price%|` < 3% (squeeze setup) |
 | `basis_blowout` | Annualised basis (funding × 3 × 365) outside `[-10%, +25%]` |
-| `liq_cascade` | 1h long/short liq USD ≥ $50M (BTC/ETH) or $10M (other) — *scaffolded, awaiting Sprint 1.5 data source* |
+| `liq_cascade` | 1h long/short liq USD ≥ $50M (BTC/ETH) or $10M (other) — fed by Binance `forceOrder` WebSocket |
+
+## Liquidation stream (Sprint 1.5)
+
+The `liq_cascade` rule is now backed by a live Binance `forceOrder` WebSocket
+(`wss://fstream.binance.com/ws/!forceOrder@arr`). On boot the bot opens one
+all-symbol stream, parses each frame into a `LiquidationEvent`, and feeds an
+in-memory `LiquidationAggregator` keyed by radar symbol with a rolling 1h
+window. The aggregator's totals are merged into the next derivatives poll
+snapshot as `liq_long_usd_1h` / `liq_short_usd_1h`, persisted alongside the
+existing 7 metrics, and exposed via `/liq <SYMBOL>`.
+
+The stream auto-reconnects with exponential backoff. If the WS endpoint is
+unreachable (geo-block, network, etc.) the rest of the bot keeps running —
+totals just stay at `$0`.
 
 ## Bot commands
 
@@ -107,6 +121,7 @@ poetry run mypy src
 /mute <SYMBOL>         mute alerts for a symbol
 /unmute <SYMBOL>       re-enable alerts
 /derivs <SYMBOL>       latest derivatives metrics from the DB
+/liq <SYMBOL>          last 1h liquidation totals
 ```
 
 ## License

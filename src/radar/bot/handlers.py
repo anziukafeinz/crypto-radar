@@ -75,6 +75,7 @@ async def cmd_help(message: Message) -> None:
         "/mute `<SYMBOL>` — mute alerts for a symbol\n"
         "/unmute `<SYMBOL>` — re-enable alerts\n"
         "/derivs `<SYMBOL>` — latest derivatives metrics\n"
+        "/liq `<SYMBOL>` — last 1h liquidation totals\n"
     )
     await message.answer(body, parse_mode="Markdown")
 
@@ -173,6 +174,43 @@ async def cmd_unmute(message: Message, command: CommandObject) -> None:
         sub = await _get_or_create_subscriber(session, message)
         sub.muted_assets = [s for s in sub.muted_assets if s != symbol]
     await message.answer(f"Unmuted `{symbol}`.", parse_mode="Markdown")
+
+
+@router.message(Command("liq"))
+async def cmd_liq(message: Message, command: CommandObject) -> None:
+    """Show last 1h liquidation totals for ``<SYMBOL>`` from the metrics store."""
+    symbol = _parse_symbol(command)
+    if symbol is None:
+        await message.answer("Usage: `/liq BTC`", parse_mode="Markdown")
+        return
+    async with session_scope() as session:
+        result = await session.execute(
+            select(Metric)
+            .where(Metric.asset == symbol)
+            .where(Metric.metric_name.in_(("liq_long_usd_1h", "liq_short_usd_1h")))
+            .order_by(Metric.ts.desc())
+            .limit(10)
+        )
+        rows = list(result.scalars().all())
+    if not rows:
+        await message.answer(
+            f"No liquidation data for `{symbol}` yet — wait one poll cycle.",
+            parse_mode="Markdown",
+        )
+        return
+    latest: dict[str, Metric] = {}
+    for m in rows:
+        latest.setdefault(m.metric_name, m)
+    long_v = latest["liq_long_usd_1h"].value if "liq_long_usd_1h" in latest else 0.0
+    short_v = latest["liq_short_usd_1h"].value if "liq_short_usd_1h" in latest else 0.0
+    last_ts = max(m.ts for m in latest.values()).isoformat(timespec="seconds")
+    body = (
+        f"*{symbol}* — last 1h liquidations\n"
+        f"long: `${long_v / 1e6:,.2f}M`\n"
+        f"short: `${short_v / 1e6:,.2f}M`\n"
+        f"as of (UTC): `{last_ts}`"
+    )
+    await message.answer(body, parse_mode="Markdown")
 
 
 @router.message(Command("derivs"))
