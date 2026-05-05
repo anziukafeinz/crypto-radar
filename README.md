@@ -83,9 +83,31 @@ poetry run mypy src
 | Sprint | Scope | Status |
 |---|---|---|
 | 0 | Skeleton + Telegram bot hello-world + SQLite | done |
-| 1 | Derivatives MVP — 4 alert presets | planned |
+| 1 | Derivatives MVP — Binance source, 4 alert presets, scheduler poll | done |
+| 1.5 | Liquidation data source (Coinglass / WebSocket) | planned |
 | 2 | Narrative MVP — 2 alerts + daily digest | planned |
-| 3 | Cross-signal, watchlist, mute/snooze, threshold tuning | planned |
+| 3 | Cross-signal, threshold tuning per user, backtest replay | planned |
+
+## Alert presets (Sprint 1)
+
+| Preset | Trigger |
+|---|---|
+| `funding_extreme` | Funding rate > +0.05% (long) or < -0.03% (short) |
+| `oi_surge` | 24h OI move > +15% with `|price%|` < 3% (squeeze setup) |
+| `basis_blowout` | Annualised basis (funding × 3 × 365) outside `[-10%, +25%]` |
+| `liq_cascade` | 1h long/short liq USD ≥ $50M (BTC/ETH) or $10M (other) — *scaffolded, awaiting Sprint 1.5 data source* |
+
+## Bot commands
+
+```
+/start /help /ping /status /version
+/presets               list active alert rules
+/watch <SYMBOL>        add to your watchlist
+/unwatch <SYMBOL>      remove from watchlist
+/mute <SYMBOL>         mute alerts for a symbol
+/unmute <SYMBOL>       re-enable alerts
+/derivs <SYMBOL>       latest derivatives metrics from the DB
+```
 
 ## License
 

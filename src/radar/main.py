@@ -11,10 +11,15 @@ from aiogram.enums import ParseMode
 from loguru import logger
 
 from radar import __version__
+from radar.alerts.dispatcher import TelegramNotifier
+from radar.alerts.engine import AlertEngine
+from radar.alerts.presets import load_default_rules
 from radar.bot import build_dispatcher
 from radar.config import get_settings
-from radar.db.session import init_db
+from radar.db.session import get_sessionmaker, init_db
+from radar.modules.derivatives import DerivativesPoller, parse_universe
 from radar.scheduler import build_scheduler
+from radar.sources.binance import Binance
 
 
 def configure_logging(level: str) -> None:
@@ -52,7 +57,22 @@ async def main() -> None:
     )
     dispatcher = build_dispatcher()
 
-    scheduler = build_scheduler()
+    sessionmaker = get_sessionmaker()
+    binance = Binance()
+    engine = AlertEngine(rules=load_default_rules())
+    notifier = TelegramNotifier(bot=bot, sessionmaker=sessionmaker)
+    universe = parse_universe(settings.derivatives_universe)
+    logger.info("Tracking {} symbols: {}", len(universe), ", ".join(universe))
+
+    poller = DerivativesPoller(
+        binance=binance,
+        sessionmaker=sessionmaker,
+        engine=engine,
+        notifier=notifier,
+        universe=universe,
+    )
+
+    scheduler = build_scheduler(settings, poller)
     scheduler.start()
 
     try:
@@ -60,6 +80,7 @@ async def main() -> None:
         await dispatcher.start_polling(bot, handle_signals=True)
     finally:
         scheduler.shutdown(wait=False)
+        await binance.aclose()
         await bot.session.close()
         logger.info("Bot polling stopped")
 

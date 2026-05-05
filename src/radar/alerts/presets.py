@@ -1,15 +1,24 @@
-"""Built-in alert presets.
+"""Alert preset registry.
 
-Sprint 1 will populate Derivatives presets and Sprint 2 will populate Narrative
-presets. For Sprint 0 we expose an empty registry plus the loader signature so
-the engine can be wired up end-to-end.
+Sprint 1 wires up four derivatives rules. Sprint 2 will append narrative rules.
 """
 
 from __future__ import annotations
 
 from radar.alerts.engine import BaseRule
+from radar.alerts.rules import (
+    BasisBlowoutRule,
+    FundingExtremeRule,
+    LiquidationCascadeRule,
+    OISurgeRule,
+)
 
 
 def load_default_rules() -> list[BaseRule]:
-    """Return the rules that should run on every poll cycle."""
-    return []
+    """Return rule instances that the engine evaluates on every poll cycle."""
+    return [
+        FundingExtremeRule(),
+        OISurgeRule(),
+        BasisBlowoutRule(),
+        LiquidationCascadeRule(),
+    ]

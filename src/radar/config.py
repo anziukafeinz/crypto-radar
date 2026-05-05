@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     narrative_poll_interval_min: int = Field(default=60)
     digest_hour_local: int = Field(default=7)
 
+    derivatives_universe: str | None = Field(default=None)
+
 
 _settings: Settings | None = None
 
